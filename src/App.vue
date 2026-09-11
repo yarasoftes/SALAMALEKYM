@@ -1,24 +1,27 @@
+```vue
 <script setup lang="ts">
+import { open } from '@tauri-apps/plugin-dialog'
+
 import {
   computed,
   nextTick,
   onMounted,
   onUnmounted,
   ref,
+  watch,
 } from 'vue'
+
+/* =========================================================
+   TYPES
+========================================================= */
 
 interface Message {
   id: number
   text: string
   sender: 'me' | 'other'
   time: string
-
-  // Картинка сообщения
   image?: string
   imageName?: string
-
-  // Пользователь, которому принадлежит сообщение
-  userId?: number
 }
 
 interface Chat {
@@ -39,50 +42,31 @@ interface SelectedFile {
   dataUrl: string
 }
 
-interface User {
-  id: number
-  name: string
-  username: string
-  avatar: string
-  online: boolean
+interface SavedState {
+  messages: Record<number, Message[]>
+  chats: Chat[]
 }
+
+/* =========================================================
+   STATE
+========================================================= */
+
+const DB_NAME = 'yaraasx-messenger'
+const DB_VERSION = 1
+const DB_STORE = 'state'
+const DB_KEY = 'main'
+
+let persistenceWatcher:
+    (() => void) | null = null
 
 const search = ref('')
 const messageText = ref('')
+
+/*
+ * 1 = Oleg
+ * 2 = Yaraasx
+ */
 const activeChatId = ref(1)
-
-/*
-|--------------------------------------------------------------------------
-| ПОЛЬЗОВАТЕЛИ
-|--------------------------------------------------------------------------
-*/
-
-const users = ref<User[]>([
-  {
-    id: 1,
-    name: 'Yaraasx',
-    username: '@yaraasx',
-    avatar: 'Y',
-    online: true,
-  },
-  {
-    id: 2,
-    name: 'Yaraasx 2',
-    username: '@yaraasx2',
-    avatar: 'Y2',
-    online: true,
-  },
-])
-
-const activeUserId = ref(1)
-
-const userSwitcherOpen = ref(false)
-
-/*
-|--------------------------------------------------------------------------
-| EMOJI / FILE
-|--------------------------------------------------------------------------
-*/
 
 const emojiOpen = ref(false)
 
@@ -92,11 +76,9 @@ const fileInput =
 const selectedFile =
     ref<SelectedFile | null>(null)
 
-/*
-|--------------------------------------------------------------------------
-| CHATS
-|--------------------------------------------------------------------------
-*/
+/* =========================================================
+   CHATS
+========================================================= */
 
 const chats = ref<Chat[]>([
   {
@@ -109,77 +91,61 @@ const chats = ref<Chat[]>([
     lastTime: '12:41',
     unread: 2,
   },
+
   {
     id: 2,
-    name: 'Kirill',
-    username: '@kirill',
-    avatar: 'K',
-    online: false,
-    lastMessage: 'До встречи!',
-    lastTime: 'Вчера',
+    name: 'Yaraasx',
+    username: '@yaraasx',
+    avatar: 'Y',
+    online: true,
+    lastMessage: 'Это мои сообщения',
+    lastTime: '12:40',
     unread: 0,
   },
 ])
 
-/*
-|--------------------------------------------------------------------------
-| MESSAGES
-|--------------------------------------------------------------------------
-|
-| userId = 1 — сообщения первого пользователя.
-| Старые сообщения без userId автоматически считаются сообщениями
-| первого пользователя.
-|
-*/
+/* =========================================================
+   MESSAGES
+========================================================= */
 
-const messages = ref<Record<number, Message[]>>({
-  1: [
-    {
-      id: 1,
-      text: 'Привет!',
-      sender: 'other',
-      time: '12:39',
-      userId: 1,
-    },
-    {
-      id: 2,
-      text: 'Привет! Как дела?',
-      sender: 'me',
-      time: '12:40',
-      userId: 1,
-    },
-    {
-      id: 3,
-      text: 'Отлично 😎 А у тебя?',
-      sender: 'other',
-      time: '12:41',
-      userId: 1,
-    },
-  ],
+const messages =
+    ref<Record<number, Message[]>>({
+      1: [
+        {
+          id: 1,
+          text: 'Привет!',
+          sender: 'other',
+          time: '12:39',
+        },
 
-  2: [
-    {
-      id: 4,
-      text: 'Привет, Kirill!',
-      sender: 'me',
-      time: 'Вчера',
-      userId: 1,
-    },
-    {
-      id: 5,
-      text: 'Привет! До встречи!',
-      sender: 'other',
-      time: 'Вчера',
-      userId: 1,
-    },
-  ],
-})
+        {
+          id: 2,
+          text: 'Привет! Как дела?',
+          sender: 'me',
+          time: '12:40',
+        },
 
-/*
-|--------------------------------------------------------------------------
-| EMOJI
-|--------------------------------------------------------------------------
-*/
+        {
+          id: 3,
+          text: 'Отлично 😎 А у тебя?',
+          sender: 'other',
+          time: '12:41',
+        },
+      ],
+
+      2: [
+        {
+          id: 4,
+          text: 'Это чат с самим собой',
+          sender: 'me',
+          time: '12:40',
+        },
+      ],
+    })
+
+/* =========================================================
+   EMOJI
+========================================================= */
 
 const allEmojis = [
   '😀', '😃', '😄', '😁', '😆', '😅', '😂', '🤣',
@@ -219,55 +185,12 @@ const allEmojis = [
   '🎸', '🎧', '🎬', '🚗', '✈️', '🚀', '🏠', '💻',
 ]
 
-const visibleEmojis = ref<string[]>([])
+const visibleEmojis =
+    ref<string[]>([])
 
-/*
-|--------------------------------------------------------------------------
-| ACTIVE USER
-|--------------------------------------------------------------------------
-*/
-
-const activeUser = computed(() => {
-  return (
-      users.value.find(
-          user =>
-              user.id === activeUserId.value,
-      ) ?? users.value[0]
-  )
-})
-
-/*
-|--------------------------------------------------------------------------
-| ПЕРЕКЛЮЧЕНИЕ ПОЛЬЗОВАТЕЛЯ
-|--------------------------------------------------------------------------
-*/
-
-function toggleUserSwitcher() {
-  userSwitcherOpen.value =
-      !userSwitcherOpen.value
-}
-
-function switchUser(userId: number) {
-  activeUserId.value = userId
-
-  userSwitcherOpen.value = false
-
-  messageText.value = ''
-
-  selectedFile.value = null
-
-  emojiOpen.value = false
-
-  if (fileInput.value) {
-    fileInput.value.value = ''
-  }
-}
-
-/*
-|--------------------------------------------------------------------------
-| ПЕРЕМЕШИВАНИЕ EMOJI
-|--------------------------------------------------------------------------
-*/
+/* =========================================================
+   EMOJI HELPERS
+========================================================= */
 
 function shuffle<T>(array: T[]): T[] {
   const result = [...array]
@@ -277,8 +200,7 @@ function shuffle<T>(array: T[]): T[] {
       i > 0;
       i--
   ) {
-    const j =
-        Math.floor(
+    const j = Math.floor(
             Math.random() * (i + 1),
         )
 
@@ -296,11 +218,9 @@ function generateRandomEmojis() {
       shuffle(allEmojis).slice(0, 42)
 }
 
-/*
-|--------------------------------------------------------------------------
-| COMPUTED
-|--------------------------------------------------------------------------
-*/
+/* =========================================================
+   COMPUTED
+========================================================= */
 
 const activeChat = computed(() => {
   return chats.value.find(
@@ -310,15 +230,10 @@ const activeChat = computed(() => {
 })
 
 const activeMessages = computed(() => {
-  const chatMessages =
+  return (
       messages.value[
           activeChatId.value
           ] ?? []
-
-  return chatMessages.filter(
-      message =>
-          (message.userId ?? 1) ===
-          activeUserId.value,
   )
 })
 
@@ -343,11 +258,9 @@ const filteredChats = computed(() => {
   )
 })
 
-/*
-|--------------------------------------------------------------------------
-| CHAT
-|--------------------------------------------------------------------------
-*/
+/* =========================================================
+   CHAT SWITCH
+========================================================= */
 
 function selectChat(chatId: number) {
   activeChatId.value = chatId
@@ -359,13 +272,45 @@ function selectChat(chatId: number) {
   if (chat) {
     chat.unread = 0
   }
+
+  emojiOpen.value = false
+
+  selectedFile.value = null
+
+  messageText.value = ''
+
+  if (fileInput.value) {
+    fileInput.value.value = ''
+  }
+
+  nextTick(() => {
+    scrollMessagesToBottom()
+  })
 }
 
-/*
-|--------------------------------------------------------------------------
-| EMOJI
-|--------------------------------------------------------------------------
-*/
+/* =========================================================
+   SCROLL
+========================================================= */
+
+function scrollMessagesToBottom() {
+  nextTick(() => {
+    const container =
+        document.querySelector(
+            '.messages',
+        ) as HTMLElement | null
+
+    if (!container) {
+      return
+    }
+
+    container.scrollTop =
+        container.scrollHeight
+  })
+}
+
+/* =========================================================
+   EMOJI
+========================================================= */
 
 function toggleEmojiPicker() {
   emojiOpen.value =
@@ -385,23 +330,60 @@ function addEmoji(emoji: string) {
   })
 }
 
-/*
-|--------------------------------------------------------------------------
-| FILE
-|--------------------------------------------------------------------------
-|
-| ВАЖНО:
-| Раньше здесь использовался Tauri open().
-| Он открывал окно выбора файла, но выбранный файл
-| не передавался в handleFileSelected().
-|
-| Теперь используем обычный hidden input.
-|
-*/
+/* =========================================================
+   FILE PICKER
+========================================================= */
 
-function openFilePicker() {
-  fileInput.value?.click()
+async function openFilePicker() {
+  /*
+   * Сначала пробуем системный Tauri picker.
+   */
+
+  try {
+    const selected =
+        await open({
+          multiple: false,
+
+          filters: [
+            {
+              name: 'Images',
+
+              extensions: [
+                'png',
+                'jpg',
+                'jpeg',
+                'webp',
+                'gif',
+              ],
+            },
+          ],
+        })
+
+    /*
+     * Если пользователь выбрал путь,
+     * здесь можно подключить чтение
+     * файла через Tauri FS.
+     *
+     * Пока оставляем fallback
+     * на обычный input.
+     */
+
+    if (selected) {
+      fileInput.value?.click()
+    }
+  } catch {
+    /*
+     * Если Tauri dialog недоступен,
+     * используем обычный input.
+     */
+
+    fileInput.value?.click()
+  }
 }
+
+/* =========================================================
+   FILE SELECT
+========================================================= */
 
 function handleFileSelected(
     event: Event,
@@ -409,7 +391,8 @@ function handleFileSelected(
   const input =
       event.target as HTMLInputElement
 
-  const file = input.files?.[0]
+  const file =
+      input.files?.[0]
 
   if (!file) {
     return
@@ -417,11 +400,11 @@ function handleFileSelected(
 
   if (!file.type.startsWith('image/')) {
     input.value = ''
-
     return
   }
 
-  const reader = new FileReader()
+  const reader =
+      new FileReader()
 
   reader.onload = () => {
     selectedFile.value = {
@@ -437,6 +420,10 @@ function handleFileSelected(
   reader.readAsDataURL(file)
 }
 
+/* =========================================================
+   REMOVE FILE
+========================================================= */
+
 function removeSelectedFile() {
   selectedFile.value = null
 
@@ -445,6 +432,10 @@ function removeSelectedFile() {
   }
 }
 
+/* =========================================================
+   FILE SIZE
+========================================================= */
+
 function formatFileSize(
     bytes: number,
 ): string {
@@ -452,7 +443,10 @@ function formatFileSize(
     return `${bytes} Б`
   }
 
-  if (bytes < 1024 * 1024) {
+  if (
+      bytes <
+      1024 * 1024
+  ) {
     return `${(
         bytes / 1024
     ).toFixed(1)} КБ`
@@ -465,11 +459,9 @@ function formatFileSize(
   ).toFixed(1)} МБ`
 }
 
-/*
-|--------------------------------------------------------------------------
-| SEND MESSAGE
-|--------------------------------------------------------------------------
-*/
+/* =========================================================
+   SEND MESSAGE
+========================================================= */
 
 function sendMessage() {
   const text =
@@ -492,8 +484,20 @@ function sendMessage() {
         ] = []
   }
 
-  const file =
-      selectedFile.value
+  const now =
+      new Date().toLocaleTimeString(
+          [],
+          {
+            hour: '2-digit',
+            minute: '2-digit',
+          },
+      )
+
+  const image =
+      selectedFile.value?.dataUrl
+
+  const imageName =
+      selectedFile.value?.name
 
   messages.value[
       activeChatId.value
@@ -504,40 +508,27 @@ function sendMessage() {
 
     sender: 'me',
 
-    time: new Date().toLocaleTimeString(
-        [],
-        {
-          hour: '2-digit',
-          minute: '2-digit',
-        },
-    ),
+    time: now,
 
-    userId:
-    activeUserId.value,
+    image,
 
-    image:
-    file?.dataUrl,
-
-    imageName:
-    file?.name,
+    imageName,
   })
 
-  const chat = chats.value.find(
-      item =>
-          item.id ===
-          activeChatId.value,
-  )
+  const chat =
+      chats.value.find(
+          item =>
+              item.id ===
+              activeChatId.value,
+      )
 
   if (chat) {
-    if (file) {
-      chat.lastMessage = text
-          ? `🖼️ ${text}`
-          : `🖼️ ${file.name}`
-    } else {
-      chat.lastMessage = text
-    }
+    chat.lastMessage =
+        selectedFile.value
+            ? `📎 ${selectedFile.value.name}`
+            : text
 
-    chat.lastTime = 'Сейчас'
+    chat.lastTime = now
   }
 
   messageText.value = ''
@@ -545,13 +536,17 @@ function sendMessage() {
   removeSelectedFile()
 
   emojiOpen.value = false
+
+  nextTick(() => {
+    scrollMessagesToBottom()
+  })
+
+  void saveState()
 }
 
-/*
-|--------------------------------------------------------------------------
-| ENTER
-|--------------------------------------------------------------------------
-*/
+/* =========================================================
+   ENTER
+========================================================= */
 
 function handleEnter(
     event: KeyboardEvent,
@@ -565,11 +560,9 @@ function handleEnter(
   sendMessage()
 }
 
-/*
-|--------------------------------------------------------------------------
-| OUTSIDE CLICK
-|--------------------------------------------------------------------------
-*/
+/* =========================================================
+   OUTSIDE CLICK
+========================================================= */
 
 function handleOutsideClick(
     event: MouseEvent,
@@ -584,47 +577,309 @@ function handleOutsideClick(
   ) {
     emojiOpen.value = false
   }
-
-  if (
-      !target.closest(
-          '.profile',
-      )
-  ) {
-    userSwitcherOpen.value = false
-  }
 }
+
+/* =========================================================
+   ESCAPE
+========================================================= */
 
 function handleEscape(
     event: KeyboardEvent,
 ) {
-  if (event.key === 'Escape') {
+  if (
+      event.key === 'Escape'
+  ) {
     emojiOpen.value = false
-
-    userSwitcherOpen.value = false
   }
 }
 
-/*
-|--------------------------------------------------------------------------
-| LIFECYCLE
-|--------------------------------------------------------------------------
-*/
+/* =========================================================
+   INDEXED DB
+========================================================= */
 
-onMounted(() => {
-  generateRandomEmojis()
+function openDatabase(): Promise<IDBDatabase> {
+  return new Promise(
+      (resolve, reject) => {
+        const request =
+            indexedDB.open(
+                DB_NAME,
+                DB_VERSION,
+            )
 
-  document.addEventListener(
-      'click',
-      handleOutsideClick,
+        request.onupgradeneeded =
+            () => {
+              const db =
+                  request.result
+
+              if (
+                  !db.objectStoreNames.contains(
+                      DB_STORE,
+                  )
+              ) {
+                db.createObjectStore(
+                    DB_STORE,
+                )
+              }
+            }
+
+        request.onsuccess = () => {
+          resolve(
+              request.result,
+          )
+        }
+
+        request.onerror = () => {
+          reject(
+              request.error,
+          )
+        }
+      },
   )
+}
 
-  document.addEventListener(
-      'keydown',
-      handleEscape,
-  )
-})
+/* =========================================================
+   SAVE STATE
+========================================================= */
+
+async function saveState() {
+  try {
+    const db =
+        await openDatabase()
+
+    const transaction =
+        db.transaction(
+            DB_STORE,
+            'readwrite',
+        )
+
+    const store =
+        transaction.objectStore(
+            DB_STORE,
+        )
+
+    const state: SavedState = {
+      messages:
+      messages.value,
+
+      chats:
+      chats.value,
+    }
+
+    store.put(
+        state,
+        DB_KEY,
+    )
+
+    await new Promise<void>(
+        (
+            resolve,
+            reject,
+        ) => {
+          transaction.oncomplete =
+              () => {
+                resolve()
+              }
+
+          transaction.onerror =
+              () => {
+                reject(
+                    transaction.error,
+                )
+              }
+
+          transaction.onabort =
+              () => {
+                reject(
+                    transaction.error,
+                )
+              }
+        },
+    )
+
+    db.close()
+  } catch (error) {
+    console.error(
+        'Ошибка сохранения данных:',
+        error,
+    )
+  }
+}
+
+/* =========================================================
+   LOAD STATE
+========================================================= */
+
+async function loadState() {
+  try {
+    const db =
+        await openDatabase()
+
+    const transaction =
+        db.transaction(
+            DB_STORE,
+            'readonly',
+        )
+
+    const store =
+        transaction.objectStore(
+            DB_STORE,
+        )
+
+    const saved =
+        await new Promise<
+            SavedState | undefined
+        >(
+            (
+                resolve,
+                reject,
+            ) => {
+              const request =
+                  store.get(
+                      DB_KEY,
+                  )
+
+              request.onsuccess =
+                  () => {
+                    resolve(
+                        request.result as
+                            | SavedState
+                            | undefined,
+                    )
+                  }
+
+              request.onerror =
+                  () => {
+                    reject(
+                        request.error,
+                    )
+                  }
+            },
+        )
+
+    db.close()
+
+    if (!saved) {
+      return
+    }
+
+    if (
+        saved.messages
+    ) {
+      messages.value =
+          saved.messages
+    }
+
+    if (
+        saved.chats
+    ) {
+      chats.value =
+          saved.chats
+    }
+
+    /*
+     * Проверяем, чтобы Yaraasx
+     * всегда существовал.
+     */
+
+    const yaraasxExists =
+        chats.value.some(
+            chat => chat.id === 2,
+        )
+
+    if (
+        !yaraasxExists
+    ) {
+      chats.value.push({
+        id: 2,
+        name: 'Yaraasx',
+        username:
+            '@yaraasx',
+        avatar: 'Y',
+        online: true,
+        lastMessage:
+            'Это мои сообщения',
+        lastTime: '12:40',
+        unread: 0,
+      })
+    }
+
+    if (
+        !messages.value[2]
+    ) {
+      messages.value[2] = []
+    }
+  } catch (error) {
+    console.error(
+        'Ошибка загрузки данных:',
+        error,
+    )
+  }
+}
+
+/* =========================================================
+   MOUNT
+========================================================= */
+
+onMounted(
+    async () => {
+      generateRandomEmojis()
+
+      await loadState()
+
+      persistenceWatcher =
+          watch(
+              [messages, chats],
+              () => {
+                void saveState()
+              },
+              {
+                deep: true,
+              },
+          )
+
+      try {
+        if (
+            navigator.storage &&
+            navigator.storage.persist
+        ) {
+          await navigator.storage.persist()
+        }
+      } catch {
+        /*
+         * Ничего страшного.
+         */
+      }
+
+      document.addEventListener(
+          'click',
+          handleOutsideClick,
+      )
+
+      document.addEventListener(
+          'keydown',
+          handleEscape,
+      )
+
+      await nextTick()
+
+      scrollMessagesToBottom()
+    },
+)
+
+/* =========================================================
+   UNMOUNT
+========================================================= */
 
 onUnmounted(() => {
+  if (
+      persistenceWatcher
+  ) {
+    persistenceWatcher()
+
+    persistenceWatcher =
+        null
+  }
+
   document.removeEventListener(
       'click',
       handleOutsideClick,
@@ -637,24 +892,27 @@ onUnmounted(() => {
 })
 </script>
 
-```vue
 <template>
   <div class="app">
 
-    <!-- =========================
+    <!-- =====================================================
          SIDEBAR
-    ========================== -->
+    ====================================================== -->
 
     <aside class="sidebar">
 
-      <!-- HEADER -->
       <div class="sidebar-header">
+
         <div class="brand">
+
           <div class="brand-logo">
             Y
           </div>
 
-          <span>YARAASX</span>
+          <span>
+            YARAASX
+          </span>
+
         </div>
 
         <button
@@ -663,10 +921,13 @@ onUnmounted(() => {
         >
           +
         </button>
+
       </div>
 
       <!-- SEARCH -->
+
       <div class="search-container">
+
         <div class="search-box">
 
           <span class="search-icon">
@@ -688,9 +949,11 @@ onUnmounted(() => {
           </span>
 
         </div>
+
       </div>
 
       <!-- CHAT LIST -->
+
       <div class="chat-list">
 
         <button
@@ -698,13 +961,15 @@ onUnmounted(() => {
             :key="chat.id"
             class="chat-item"
             :class="{
-              active:
-                chat.id === activeChatId,
-            }"
-            @click="selectChat(chat.id)"
+            active:
+              chat.id ===
+              activeChatId,
+          }"
+            @click="
+            selectChat(chat.id)
+          "
         >
 
-          <!-- AVATAR -->
           <div class="avatar">
 
             {{ chat.avatar }}
@@ -716,7 +981,6 @@ onUnmounted(() => {
 
           </div>
 
-          <!-- CHAT INFO -->
           <div class="chat-info">
 
             <div class="chat-top">
@@ -733,7 +997,9 @@ onUnmounted(() => {
 
             <div class="chat-bottom">
 
-              <span class="last-message">
+              <span
+                  class="last-message"
+              >
                 {{ chat.lastMessage }}
               </span>
 
@@ -750,9 +1016,10 @@ onUnmounted(() => {
 
         </button>
 
-        <!-- EMPTY SEARCH -->
         <div
-            v-if="filteredChats.length === 0"
+            v-if="
+            filteredChats.length === 0
+          "
             class="empty-search"
         >
           Ничего не найдено
@@ -760,148 +1027,83 @@ onUnmounted(() => {
 
       </div>
 
-
-      <!-- =========================
-           PROFILE / USER SWITCHER
-      ========================== -->
+      <!-- PROFILE -->
 
       <div class="profile">
 
-        <!-- CURRENT USER -->
         <button
             class="profile-main"
-            @click="toggleUserSwitcher"
+            type="button"
+            @click="
+            selectChat(2)
+          "
         >
 
           <div class="profile-avatar">
-            {{ activeUser.avatar }}
+
+            Y
+
+            <span
+                class="
+                profile-online-dot
+              "
+            />
+
           </div>
 
           <div class="profile-info">
 
             <strong>
-              {{ activeUser.name }}
+              Yaraasx
             </strong>
 
             <span>
-              {{
-                activeUser.online
-                    ? 'online'
-                    : 'offline'
-              }}
+              online
             </span>
 
           </div>
 
         </button>
 
-
-        <!-- THREE DOTS -->
         <button
             class="profile-button"
-            title="Переключить пользователя"
-            @click="toggleUserSwitcher"
+            type="button"
+            title="Меню профиля"
+            @click.stop
         >
           ⋮
         </button>
-
-
-        <!-- USER SWITCHER -->
-        <div
-            v-if="userSwitcherOpen"
-            class="user-switcher"
-            @click.stop
-        >
-
-          <div class="user-switcher-title">
-            Переключить пользователя
-          </div>
-
-
-          <!-- USERS -->
-          <button
-              v-for="user in users"
-              :key="user.id"
-              class="user-switcher-item"
-              :class="{
-                active:
-                  user.id === activeUserId,
-              }"
-              @click="switchUser(user.id)"
-          >
-
-            <div class="user-switcher-avatar">
-              {{ user.avatar }}
-            </div>
-
-            <div class="user-switcher-info">
-
-              <strong>
-                {{ user.name }}
-              </strong>
-
-              <span>
-                {{ user.username }}
-              </span>
-
-            </div>
-
-            <span
-                v-if="
-                  user.id === activeUserId
-                "
-                class="user-check"
-            >
-              ✓
-            </span>
-
-          </button>
-
-
-          <!-- ADD USER -->
-          <button
-              class="add-user-button"
-              @click.stop
-          >
-            ＋ Добавить пользователя
-          </button>
-
-        </div>
 
       </div>
 
     </aside>
 
-
-    <!-- =========================
-         MAIN CHAT
-    ========================== -->
+    <!-- =====================================================
+         CHAT
+    ====================================================== -->
 
     <main class="chat">
 
-      <!-- =========================
-           CHAT HEADER
-      ========================== -->
+      <!-- HEADER -->
 
       <header
           v-if="activeChat"
           class="chat-header"
       >
 
-        <!-- AVATAR -->
         <div class="header-avatar">
 
           {{ activeChat.avatar }}
 
           <span
-              v-if="activeChat.online"
+              v-if="
+              activeChat.online
+            "
               class="online-dot"
           />
 
         </div>
 
-
-        <!-- INFO -->
         <div class="header-info">
 
           <strong>
@@ -918,8 +1120,6 @@ onUnmounted(() => {
 
         </div>
 
-
-        <!-- ACTIONS -->
         <div class="header-actions">
 
           <button
@@ -940,54 +1140,77 @@ onUnmounted(() => {
 
       </header>
 
+      <!-- MESSAGES -->
 
-      <!-- =========================
-           MESSAGES
-      ========================== -->
+      <section
+          class="messages"
+      >
 
-      <section class="messages">
+        <div
+            class="
+            messages-background
+          "
+        />
 
-        <div class="messages-background" />
+        <div
+            class="
+            message-container
+          "
+        >
 
-
-        <div class="message-container">
-
-          <!-- MESSAGE -->
           <div
-              v-for="message in activeMessages"
+              v-for="
+              message in activeMessages
+            "
               :key="message.id"
               class="message-row"
               :class="{
-                mine:
-                  message.sender === 'me',
-              }"
+              mine:
+                message.sender ===
+                'me',
+            }"
           >
 
             <div class="message">
 
               <!-- IMAGE -->
+
               <img
-                  v-if="message.image"
-                  class="message-image"
-                  :src="message.image"
+                  v-if="
+                  message.image
+                "
+                  class="
+                  message-image
+                "
+                  :src="
+                  message.image
+                "
                   :alt="
-                    message.imageName ||
-                    'Изображение'
-                  "
+                  message.imageName ||
+                  'Изображение'
+                "
               />
 
-
               <!-- TEXT -->
+
               <div
-                  v-if="message.text"
-                  class="message-text"
+                  v-if="
+                  message.text
+                "
+                  class="
+                  message-text
+                "
               >
                 {{ message.text }}
               </div>
 
-
               <!-- META -->
-              <div class="message-meta">
+
+              <div
+                  class="
+                  message-meta
+                "
+              >
 
                 <span>
                   {{ message.time }}
@@ -995,8 +1218,9 @@ onUnmounted(() => {
 
                 <span
                     v-if="
-                      message.sender === 'me'
-                    "
+                    message.sender ===
+                    'me'
+                  "
                     class="checks"
                 >
                   ✓✓
@@ -1008,52 +1232,49 @@ onUnmounted(() => {
 
           </div>
 
-
-          <!-- NO MESSAGES -->
-          <div
-              v-if="activeMessages.length === 0"
-              class="empty-messages"
-          >
-            Нет сообщений
-          </div>
-
         </div>
 
       </section>
 
-
-      <!-- =========================
+      <!-- ===================================================
            COMPOSER
-      ========================== -->
+      ==================================================== -->
 
-      <footer class="composer">
+      <footer
+          class="composer"
+      >
 
+        <!-- EMOJI -->
 
-        <!-- =====================
-             EMOJI
-        ====================== -->
-
-        <div class="emoji-wrapper">
+        <div
+            class="emoji-wrapper"
+        >
 
           <button
-              class="composer-button"
+              class="
+              composer-button
+            "
               title="Emoji"
               @click.stop="
-                toggleEmojiPicker()
-              "
+              toggleEmojiPicker()
+            "
           >
             😊
           </button>
 
-
-          <!-- EMOJI PANEL -->
           <div
               v-if="emojiOpen"
-              class="emoji-panel"
+              class="
+              emoji-panel
+            "
               @click.stop
           >
 
-            <div class="emoji-header">
+            <div
+                class="
+                emoji-header
+              "
+            >
 
               <strong>
                 Emoji
@@ -1065,28 +1286,37 @@ onUnmounted(() => {
 
             </div>
 
-
-            <div class="emoji-grid">
+            <div
+                class="
+                emoji-grid
+              "
+            >
 
               <button
                   v-for="(
-                    emoji, index
-                  ) in visibleEmojis"
+                  emoji,
+                  index
+                ) in visibleEmojis"
                   :key="
-                    `${emoji}-${index}`
-                  "
-                  class="emoji-item"
+                  `${emoji}-${index}`
+                "
+                  class="
+                  emoji-item
+                "
                   @click="
-                    addEmoji(emoji)
-                  "
+                  addEmoji(emoji)
+                "
               >
                 {{ emoji }}
               </button>
 
             </div>
 
-
-            <div class="emoji-footer">
+            <div
+                class="
+                emoji-footer
+              "
+            >
               При следующем запуске
               набор изменится
             </div>
@@ -1095,62 +1325,56 @@ onUnmounted(() => {
 
         </div>
 
-
-        <!-- =====================
-             FILE INPUT
-        ====================== -->
+        <!-- FILE INPUT -->
 
         <input
             ref="fileInput"
-            class="hidden-file-input"
+            class="
+            hidden-file-input
+          "
             type="file"
-            accept="
-              image/png,
-              image/jpeg,
-              image/webp
-            "
+            accept="image/*"
             @change="
-              handleFileSelected
-            "
+            handleFileSelected
+          "
         />
 
-
-        <!-- =====================
-             SELECTED FILE
-        ====================== -->
+        <!-- SELECTED FILE -->
 
         <div
             v-if="selectedFile"
-            class="selected-file"
+            class="
+            selected-file
+          "
         >
 
-          <!-- PREVIEW -->
-          <img
-              v-if="
-                selectedFile.dataUrl
-              "
-              class="selected-file-preview"
-              :src="
-                selectedFile.dataUrl
-              "
-              alt="Предпросмотр"
-          />
-
-
-          <!-- FILE ICON -->
           <div
-              v-else
-              class="selected-file-icon"
+              class="
+              selected-file-preview
+            "
           >
-            📎
+
+            <img
+                :src="
+                selectedFile.dataUrl
+              "
+                :alt="
+                selectedFile.name
+              "
+            />
+
           </div>
 
-
-          <!-- FILE INFO -->
-          <div class="selected-file-info">
+          <div
+              class="
+              selected-file-info
+            "
+          >
 
             <strong>
-              {{ selectedFile.name }}
+              {{
+                selectedFile.name
+              }}
             </strong>
 
             <span>
@@ -1163,64 +1387,65 @@ onUnmounted(() => {
 
           </div>
 
-
-          <!-- REMOVE -->
           <button
-              class="remove-file"
+              class="
+              remove-file
+            "
               title="Удалить"
               @click="
-                removeSelectedFile()
-              "
+              removeSelectedFile()
+            "
           >
             ×
           </button>
 
         </div>
 
-
-        <!-- =====================
-             TEXT INPUT
-        ====================== -->
+        <!-- TEXT -->
 
         <textarea
             v-model="messageText"
-            placeholder="Написать сообщение..."
+            placeholder="
+            Написать сообщение...
+          "
             rows="1"
             @keydown.enter="
-              handleEnter
-            "
+            handleEnter
+          "
         />
 
-
-        <!-- =====================
-             ATTACHMENT
-        ====================== -->
+        <!-- ATTACHMENT -->
 
         <button
-            class="composer-button"
-            title="Прикрепить изображение"
-            @click="openFilePicker"
+            class="
+            composer-button
+          "
+            title="
+            Прикрепить изображение
+          "
+            @click="
+            openFilePicker
+          "
         >
           📎
         </button>
 
-
-        <!-- =====================
-             SEND
-        ====================== -->
+        <!-- SEND -->
 
         <button
             class="send-button"
             :class="{
-              ready:
-                messageText.trim() ||
-                selectedFile,
-            }"
+            ready:
+              messageText.trim() ||
+              selectedFile,
+          }"
             :disabled="
-              !messageText.trim() &&
-              !selectedFile
-            "
-            @click="sendMessage"
+            !messageText.trim() &&
+            !selectedFile
+          "
+            @click="
+            sendMessage
+          "
         >
           ➤
         </button>
@@ -1232,7 +1457,6 @@ onUnmounted(() => {
   </div>
 </template>
 
-```css
 <style>
 * {
   box-sizing: border-box;
@@ -1270,9 +1494,9 @@ button {
   border: 0;
 }
 
-/* =========================
+/* =========================================================
    APP
-========================= */
+========================================================= */
 
 .app {
   width: 100%;
@@ -1283,9 +1507,9 @@ button {
   background: #0e1014;
 }
 
-/* =========================
+/* =========================================================
    SIDEBAR
-========================= */
+========================================================= */
 
 .sidebar {
   width: 340px;
@@ -1296,7 +1520,9 @@ button {
   flex-direction: column;
 
   background: #15171c;
-  border-right: 1px solid #292c33;
+
+  border-right:
+      1px solid #292c33;
 }
 
 .sidebar-header {
@@ -1308,16 +1534,19 @@ button {
 
   padding: 0 18px;
 
-  border-bottom: 1px solid #25282e;
+  border-bottom:
+      1px solid #25282e;
 }
 
 .brand {
   display: flex;
   align-items: center;
+
   gap: 11px;
 
   font-size: 17px;
   font-weight: 800;
+
   letter-spacing: 1.5px;
 }
 
@@ -1331,14 +1560,21 @@ button {
 
   border-radius: 12px;
 
-  background: linear-gradient(
-      135deg,
-      #367cff,
-      #6d42ff
-  );
+  background:
+      linear-gradient(
+          135deg,
+          #367cff,
+          #6d42ff
+      );
 
   box-shadow:
-      0 5px 20px rgba(60, 100, 255, 0.3);
+      0 5px 20px
+      rgba(
+          60,
+          100,
+          255,
+          0.3
+      );
 
   font-size: 18px;
   font-weight: 800;
@@ -1351,6 +1587,7 @@ button {
   border-radius: 10px;
 
   background: transparent;
+
   color: #89909c;
 
   font-size: 25px;
@@ -1365,9 +1602,9 @@ button {
   color: white;
 }
 
-/* =========================
+/* =========================================================
    SEARCH
-========================= */
+========================================================= */
 
 .search-container {
   padding: 14px 14px 10px;
@@ -1390,6 +1627,7 @@ button {
 
 .search-icon {
   color: #858c98;
+
   font-size: 23px;
 }
 
@@ -1404,6 +1642,7 @@ button {
   background: transparent;
 
   color: white;
+
   font-size: 14px;
 }
 
@@ -1413,14 +1652,15 @@ button {
 
 .clear-search {
   color: #8c929d;
+
   font-size: 20px;
 
   cursor: pointer;
 }
 
-/* =========================
+/* =========================================================
    CHAT LIST
-========================= */
+========================================================= */
 
 .chat-list {
   flex: 1;
@@ -1436,6 +1676,7 @@ button {
 
 .chat-list::-webkit-scrollbar-thumb {
   background: #343840;
+
   border-radius: 10px;
 }
 
@@ -1452,6 +1693,7 @@ button {
   border-radius: 12px;
 
   background: transparent;
+
   color: white;
 
   text-align: left;
@@ -1469,6 +1711,10 @@ button {
   background: #2f6fe4;
 }
 
+/* =========================================================
+   AVATARS
+========================================================= */
+
 .avatar,
 .header-avatar,
 .profile-avatar {
@@ -1482,11 +1728,12 @@ button {
 
   border-radius: 50%;
 
-  background: linear-gradient(
-      135deg,
-      #3c82f6,
-      #7647ff
-  );
+  background:
+      linear-gradient(
+          135deg,
+          #3c82f6,
+          #7647ff
+      );
 
   color: white;
 
@@ -1509,19 +1756,26 @@ button {
   width: 12px;
   height: 12px;
 
-  border: 2px solid #15171c;
+  border:
+      2px solid #15171c;
 
   border-radius: 50%;
 
   background: #32d583;
 }
 
-.chat-item.active .online-dot {
+.chat-item.active
+.online-dot {
   border-color: #2f6fe4;
 }
 
+/* =========================================================
+   CHAT INFO
+========================================================= */
+
 .chat-info {
   min-width: 0;
+
   flex: 1;
 }
 
@@ -1533,6 +1787,7 @@ button {
 
 .chat-top {
   justify-content: space-between;
+
   gap: 8px;
 
   margin-bottom: 4px;
@@ -1540,6 +1795,7 @@ button {
 
 .chat-name {
   font-size: 15px;
+
   font-weight: 650;
 }
 
@@ -1551,12 +1807,14 @@ button {
   font-size: 11px;
 }
 
-.chat-item.active .chat-time {
+.chat-item.active
+.chat-time {
   color: #dbe7ff;
 }
 
 .chat-bottom {
   justify-content: space-between;
+
   gap: 8px;
 }
 
@@ -1570,10 +1828,12 @@ button {
   font-size: 13px;
 
   text-overflow: ellipsis;
+
   white-space: nowrap;
 }
 
-.chat-item.active .last-message {
+.chat-item.active
+.last-message {
   color: #e1eaff;
 }
 
@@ -1601,14 +1861,15 @@ button {
   color: #777e8a;
 
   text-align: center;
+
   font-size: 14px;
 }
 
-
+/* =========================================================
+   PROFILE
+========================================================= */
 
 .profile {
-  position: relative;
-
   height: 72px;
 
   display: flex;
@@ -1618,7 +1879,8 @@ button {
 
   padding: 10px 14px;
 
-  border-top: 1px solid #292c33;
+  border-top:
+      1px solid #292c33;
 }
 
 .profile-main {
@@ -1634,6 +1896,7 @@ button {
   padding: 0;
 
   background: transparent;
+
   color: white;
 
   text-align: left;
@@ -1641,19 +1904,41 @@ button {
   cursor: pointer;
 }
 
-.profile-main:hover {
-  opacity: 0.9;
-}
-
 .profile-avatar {
   width: 42px;
   height: 42px;
 
-  background: linear-gradient(
-      135deg,
-      #13b5ea,
-      #246bfe
-  );
+  background:
+      linear-gradient(
+          135deg,
+          #13b5ea,
+          #246bfe
+      );
+
+  transition:
+      transform 0.15s;
+}
+
+.profile-main:hover
+.profile-avatar {
+  transform: scale(1.04);
+}
+
+.profile-online-dot {
+  position: absolute;
+
+  right: 0;
+  bottom: 0;
+
+  width: 12px;
+  height: 12px;
+
+  border:
+      2px solid #15171c;
+
+  border-radius: 50%;
+
+  background: #32d583;
 }
 
 .profile-info {
@@ -1668,12 +1953,7 @@ button {
 }
 
 .profile-info strong {
-  overflow: hidden;
-
   font-size: 14px;
-
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .profile-info span {
@@ -1683,10 +1963,14 @@ button {
 }
 
 .profile-button {
-  width: 32px;
+  width: 36px;
   height: 36px;
 
   flex-shrink: 0;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
 
   border-radius: 9px;
 
@@ -1701,193 +1985,17 @@ button {
 
 .profile-button:hover {
   background: #24272e;
-  color: white;
-}
-
-/* =========================
-   USER SWITCHER
-========================= */
-
-.user-switcher {
-  position: absolute;
-
-  left: 10px;
-  bottom: 68px;
-
-  width: 280px;
-
-  padding: 8px;
-
-  border: 1px solid #353942;
-
-  border-radius: 14px;
-
-  background: #1b1e24;
-
-  box-shadow:
-      0 15px 45px rgba(0, 0, 0, 0.55);
-
-  z-index: 200;
-
-  animation:
-      userSwitcherOpen
-      0.15s
-      ease-out;
-}
-
-.user-switcher-title {
-  padding: 8px 10px 10px;
-
-  color: #777e8a;
-
-  font-size: 11px;
-  font-weight: 600;
-
-  text-transform: uppercase;
-}
-
-.user-switcher-item {
-  width: 100%;
-
-  display: flex;
-  align-items: center;
-
-  gap: 10px;
-
-  padding: 9px;
-
-  border-radius: 10px;
-
-  background: transparent;
-  color: white;
-
-  text-align: left;
-
-  cursor: pointer;
-
-  transition: 0.15s;
-}
-
-.user-switcher-item:hover {
-  background: #25282e;
-}
-
-.user-switcher-item.active {
-  background: #2f6fe4;
-}
-
-.user-switcher-avatar {
-  width: 38px;
-  height: 38px;
-
-  flex-shrink: 0;
-
-  display: flex;
-  align-items: center;
-  justify-content: center;
-
-  border-radius: 50%;
-
-  background: linear-gradient(
-      135deg,
-      #3c82f6,
-      #7647ff
-  );
 
   color: white;
-
-  font-size: 13px;
-  font-weight: 700;
 }
 
-.user-switcher-info {
-  min-width: 0;
-
-  flex: 1;
-
-  display: flex;
-  flex-direction: column;
-
-  gap: 2px;
-}
-
-.user-switcher-info strong {
-  overflow: hidden;
-
-  font-size: 13px;
-
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.user-switcher-info span {
-  overflow: hidden;
-
-  color: #8d95a2;
-
-  font-size: 11px;
-
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.user-switcher-item.active
-.user-switcher-info span {
-  color: #dbe7ff;
-}
-
-.user-check {
-  flex-shrink: 0;
-
-  color: white;
-
-  font-size: 17px;
-  font-weight: 700;
-}
-
-.add-user-button {
-  width: 100%;
-
-  margin-top: 5px;
-
-  padding: 10px;
-
-  border-top: 1px solid #30343c;
-  border-radius: 9px;
-
-  background: transparent;
-
-  color: #7eaaff;
-
-  text-align: left;
-
-  cursor: pointer;
-
-  transition: 0.15s;
-}
-
-.add-user-button:hover {
-  background: #25282e;
-}
-
-@keyframes userSwitcherOpen {
-  from {
-    opacity: 0;
-    transform: translateY(8px);
-  }
-
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-/* =========================
+/* =========================================================
    CHAT
-========================= */
+========================================================= */
 
 .chat {
   min-width: 0;
+
   height: 100%;
 
   flex: 1;
@@ -1898,9 +2006,9 @@ button {
   background: #101216;
 }
 
-/* =========================
+/* =========================================================
    HEADER
-========================= */
+========================================================= */
 
 .chat-header {
   height: 70px;
@@ -1910,7 +2018,8 @@ button {
 
   padding: 0 18px;
 
-  border-bottom: 1px solid #292c33;
+  border-bottom:
+      1px solid #292c33;
 
   background: #17191e;
 }
@@ -1922,7 +2031,8 @@ button {
   margin-right: 12px;
 }
 
-.header-avatar .online-dot {
+.header-avatar
+.online-dot {
   border-color: #17191e;
 }
 
@@ -1970,12 +2080,13 @@ button {
 
 .header-button:hover {
   background: #25282e;
+
   color: white;
 }
 
-/* =========================
+/* =========================================================
    MESSAGES
-========================= */
+========================================================= */
 
 .messages {
   position: relative;
@@ -2012,6 +2123,7 @@ button {
 
   display: flex;
   flex-direction: column;
+
   justify-content: flex-end;
 
   padding: 25px 7%;
@@ -2028,20 +2140,30 @@ button {
 }
 
 .message {
-  max-width: min(600px, 70%);
+  max-width:
+      min(600px, 70%);
 
   padding: 9px 12px 7px;
 
-  border-radius: 14px 14px 14px 4px;
+  border-radius:
+      14px 14px 14px 4px;
 
   background: #24272e;
 
   box-shadow:
-      0 2px 5px rgba(0, 0, 0, 0.15);
+      0 2px 5px
+      rgba(
+          0,
+          0,
+          0,
+          0.15
+      );
 }
 
-.message-row.mine .message {
-  border-radius: 14px 14px 4px 14px;
+.message-row.mine
+.message {
+  border-radius:
+      14px 14px 4px 14px;
 
   background: #2d6fdb;
 }
@@ -2050,38 +2172,34 @@ button {
   color: #f5f7fa;
 
   font-size: 14px;
+
   line-height: 1.45;
 
   white-space: pre-wrap;
+
   overflow-wrap: anywhere;
 }
 
-/* =========================
+/* =========================================================
    MESSAGE IMAGE
-========================= */
+========================================================= */
 
 .message-image {
   display: block;
 
-  width: 100%;
+  width: auto;
+
   max-width: 420px;
+
   max-height: 420px;
 
-  margin: 0 0 7px;
+  margin-bottom: 7px;
 
-  border-radius: 10px;
+  border-radius: 11px;
 
-  object-fit: cover;
+  object-fit: contain;
 
   background: #15171c;
-
-  cursor: pointer;
-
-  transition: opacity 0.15s;
-}
-
-.message-image:hover {
-  opacity: 0.95;
 }
 
 .message-meta {
@@ -2098,7 +2216,8 @@ button {
   font-size: 10px;
 }
 
-.message-row.mine .message-meta {
+.message-row.mine
+.message-meta {
   color: #c9dcff;
 }
 
@@ -2106,21 +2225,9 @@ button {
   font-size: 11px;
 }
 
-.empty-messages {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-
-  min-height: 200px;
-
-  color: #777e8a;
-
-  font-size: 14px;
-}
-
-/* =========================
+/* =========================================================
    COMPOSER
-========================= */
+========================================================= */
 
 .composer {
   position: relative;
@@ -2136,7 +2243,8 @@ button {
 
   background: #17191e;
 
-  border-top: 1px solid #292c33;
+  border-top:
+      1px solid #292c33;
 }
 
 .composer textarea {
@@ -2159,6 +2267,7 @@ button {
   color: white;
 
   font-size: 14px;
+
   line-height: 20px;
 }
 
@@ -2192,6 +2301,7 @@ button {
 
 .composer-button:hover {
   background: #25282e;
+
   color: white;
 }
 
@@ -2209,7 +2319,13 @@ button {
   color: white;
 
   box-shadow:
-      0 4px 15px rgba(50, 121, 230, 0.25);
+      0 4px 15px
+      rgba(
+          50,
+          121,
+          230,
+          0.25
+      );
 }
 
 .send-button.ready:hover {
@@ -2220,9 +2336,9 @@ button {
   cursor: default;
 }
 
-/* =========================
+/* =========================================================
    EMOJI
-========================= */
+========================================================= */
 
 .emoji-wrapper {
   position: relative;
@@ -2239,14 +2355,21 @@ button {
 
   padding: 14px;
 
-  border: 1px solid #353942;
+  border:
+      1px solid #353942;
 
   border-radius: 16px;
 
   background: #1b1e24;
 
   box-shadow:
-      0 15px 45px rgba(0, 0, 0, 0.55);
+      0 15px 45px
+      rgba(
+          0,
+          0,
+          0,
+          0.55
+      );
 
   z-index: 100;
 }
@@ -2258,7 +2381,8 @@ button {
 
   padding: 2px 4px 12px;
 
-  border-bottom: 1px solid #2c2f36;
+  border-bottom:
+      1px solid #2c2f36;
 }
 
 .emoji-header strong {
@@ -2335,9 +2459,9 @@ button {
   font-size: 10px;
 }
 
-/* =========================
+/* =========================================================
    FILE
-========================= */
+========================================================= */
 
 .hidden-file-input {
   display: none;
@@ -2357,23 +2481,32 @@ button {
 
   padding: 9px 12px;
 
-  border: 1px solid #343943;
+  border:
+      1px solid #343943;
 
   border-radius: 12px;
 
   background: #20232a;
 
   box-shadow:
-      0 8px 25px rgba(0, 0, 0, 0.35);
+      0 8px 25px
+      rgba(
+          0,
+          0,
+          0,
+          0.35
+      );
 
   z-index: 50;
 }
 
-.selected-file-icon {
-  width: 35px;
-  height: 35px;
+.selected-file-preview {
+  width: 45px;
+  height: 45px;
 
   flex-shrink: 0;
+
+  overflow: hidden;
 
   display: flex;
   align-items: center;
@@ -2384,19 +2517,11 @@ button {
   background: #2f6fe4;
 }
 
-.selected-file-preview {
-  width: 48px;
-  height: 48px;
-
-  flex-shrink: 0;
-
-  display: block;
-
-  border-radius: 8px;
+.selected-file-preview img {
+  width: 100%;
+  height: 100%;
 
   object-fit: cover;
-
-  background: #15171c;
 }
 
 .selected-file-info {
@@ -2418,6 +2543,7 @@ button {
   font-size: 12px;
 
   text-overflow: ellipsis;
+
   white-space: nowrap;
 }
 
@@ -2430,8 +2556,6 @@ button {
 .remove-file {
   width: 30px;
   height: 30px;
-
-  flex-shrink: 0;
 
   border-radius: 8px;
 
@@ -2450,9 +2574,9 @@ button {
   color: white;
 }
 
-/* =========================
+/* =========================================================
    SCROLLBARS
-========================= */
+========================================================= */
 
 .messages::-webkit-scrollbar {
   width: 6px;
@@ -2464,9 +2588,9 @@ button {
   border-radius: 10px;
 }
 
-/* =========================
+/* =========================================================
    RESPONSIVE
-========================= */
+========================================================= */
 
 @media (max-width: 750px) {
   .sidebar {
@@ -2478,12 +2602,12 @@ button {
     max-width: 80%;
   }
 
-  .emoji-panel {
-    width: 300px;
+  .message-image {
+    max-width: 300px;
   }
 
-  .user-switcher {
-    width: 270px;
+  .emoji-panel {
+    width: 300px;
   }
 }
 
@@ -2515,17 +2639,12 @@ button {
     justify-content: center;
   }
 
-  .profile-main {
-    justify-content: center;
-  }
-
   .message {
     max-width: 88%;
   }
 
   .message-image {
-    max-width: 100%;
-    max-height: 300px;
+    max-width: 240px;
   }
 
   .emoji-panel {
@@ -2533,18 +2652,6 @@ button {
 
     width: 290px;
   }
-
-  .user-switcher {
-    left: 5px;
-    bottom: 65px;
-
-    width: 270px;
-  }
-
-  .selected-file-preview {
-    width: 42px;
-    height: 42px;
-  }
 }
 </style>
-
+```
