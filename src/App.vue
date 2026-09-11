@@ -1,4 +1,3 @@
-```vue
 <script setup lang="ts">
 import { open } from '@tauri-apps/plugin-dialog'
 
@@ -19,6 +18,7 @@ interface Message {
   id: number
   text: string
   sender: 'me' | 'other'
+  senderId?: string
   time: string
   image?: string
   imageName?: string
@@ -45,6 +45,7 @@ interface SelectedFile {
 interface SavedState {
   messages: Record<number, Message[]>
   chats: Chat[]
+  currentUserId?: string
 }
 
 /* =========================================================
@@ -56,16 +57,29 @@ const DB_VERSION = 1
 const DB_STORE = 'state'
 const DB_KEY = 'main'
 
-let persistenceWatcher:
-    (() => void) | null = null
+const accounts = [
+  { id: 'yaraasx', name: 'Yaraasx', username: '@yaraasx', avatar: 'Y' },
+  { id: 'oleg', name: 'Oleg', username: '@oleg', avatar: 'O' },
+] as const
+
+const currentUserId = ref<string>('yaraasx')
+const accountMenuOpen = ref(false)
+
+let persistenceWatcher: (() => void) | null = null
 
 const search = ref('')
 const messageText = ref('')
 
-/*
- * 1 = Oleg
- * 2 = Yaraasx
- */
+const currentUser = computed(() =>
+  accounts.find(account => account.id === currentUserId.value) ?? accounts[0],
+)
+
+const otherUser = computed(() =>
+  accounts.find(account => account.id !== currentUserId.value) ?? accounts[1],
+)
+
+/* В локальном режиме есть одна общая переписка между двумя аккаунтами. */
+const CONVERSATION_ID = 1
 const activeChatId = ref(1)
 
 const emojiOpen = ref(false)
@@ -115,6 +129,7 @@ const messages =
           id: 1,
           text: 'Привет!',
           sender: 'other',
+          senderId: 'oleg',
           time: '12:39',
         },
 
@@ -122,6 +137,7 @@ const messages =
           id: 2,
           text: 'Привет! Как дела?',
           sender: 'me',
+          senderId: 'yaraasx',
           time: '12:40',
         },
 
@@ -129,6 +145,7 @@ const messages =
           id: 3,
           text: 'Отлично 😎 А у тебя?',
           sender: 'other',
+          senderId: 'oleg',
           time: '12:41',
         },
       ],
@@ -223,18 +240,13 @@ function generateRandomEmojis() {
 ========================================================= */
 
 const activeChat = computed(() => {
-  return chats.value.find(
-      chat =>
-          chat.id === activeChatId.value,
-  )
+  return chats.value.find(chat => chat.id === activeChatId.value)
 })
 
 const activeMessages = computed(() => {
-  return (
-      messages.value[
-          activeChatId.value
-          ] ?? []
-  )
+  // В локальном режиме оба аккаунта смотрят на одну и ту же
+  // переписку. Для отображения `me/other` ниже используется senderId.
+  return messages.value[CONVERSATION_ID] ?? []
 })
 
 const filteredChats = computed(() => {
@@ -243,20 +255,50 @@ const filteredChats = computed(() => {
           .toLowerCase()
           .trim()
 
+  const availableChats = chats.value.filter(
+      chat => chat.id !== (currentUserId.value === 'yaraasx' ? 2 : 1),
+  )
+
   if (!value) {
-    return chats.value
+    return availableChats
   }
 
-  return chats.value.filter(
+  return availableChats.filter(
       chat =>
-          chat.name
-              .toLowerCase()
-              .includes(value) ||
-          chat.username
-              .toLowerCase()
-              .includes(value),
+          chat.name.toLowerCase().includes(value) ||
+          chat.username.toLowerCase().includes(value),
   )
 })
+
+/* =========================================================
+   ACCOUNT SWITCH
+========================================================= */
+
+function toggleAccountMenu() {
+  accountMenuOpen.value = !accountMenuOpen.value
+}
+
+async function switchAccount(userId: string) {
+  if (userId === currentUserId.value) {
+    accountMenuOpen.value = false
+    return
+  }
+
+  currentUserId.value = userId
+  activeChatId.value = otherUser.value.id === 'oleg' ? 1 : 2
+  accountMenuOpen.value = false
+  emojiOpen.value = false
+  selectedFile.value = null
+  messageText.value = ''
+
+  if (fileInput.value) {
+    fileInput.value.value = ''
+  }
+
+  await saveState()
+
+  nextTick(() => scrollMessagesToBottom())
+}
 
 /* =========================================================
    CHAT SWITCH
@@ -474,14 +516,8 @@ function sendMessage() {
     return
   }
 
-  if (
-      !messages.value[
-          activeChatId.value
-          ]
-  ) {
-    messages.value[
-        activeChatId.value
-        ] = []
+  if (!messages.value[CONVERSATION_ID]) {
+    messages.value[CONVERSATION_ID] = []
   }
 
   const now =
@@ -499,14 +535,14 @@ function sendMessage() {
   const imageName =
       selectedFile.value?.name
 
-  messages.value[
-      activeChatId.value
-      ].push({
+  messages.value[CONVERSATION_ID].push({
     id: Date.now(),
 
     text,
 
     sender: 'me',
+
+    senderId: currentUserId.value,
 
     time: now,
 
@@ -570,12 +606,12 @@ function handleOutsideClick(
   const target =
       event.target as HTMLElement
 
-  if (
-      !target.closest(
-          '.emoji-wrapper',
-      )
-  ) {
+  if (!target.closest('.emoji-wrapper')) {
     emojiOpen.value = false
+  }
+
+  if (!target.closest('.profile')) {
+    accountMenuOpen.value = false
   }
 }
 
@@ -663,6 +699,8 @@ async function saveState() {
 
       chats:
       chats.value,
+
+      currentUserId: currentUserId.value,
     }
 
     store.put(
@@ -762,6 +800,11 @@ async function loadState() {
       return
     }
 
+    if (saved.currentUserId) {
+      currentUserId.value = saved.currentUserId
+    }
+
+
     if (
         saved.messages
     ) {
@@ -769,45 +812,47 @@ async function loadState() {
           saved.messages
     }
 
-    if (
-        saved.chats
-    ) {
-      chats.value =
-          saved.chats
+    if (saved.chats) {
+      chats.value = saved.chats
     }
 
-    /*
-     * Проверяем, чтобы Yaraasx
-     * всегда существовал.
-     */
+    if (saved.currentUserId === 'yaraasx' || saved.currentUserId === 'oleg') {
+      currentUserId.value = saved.currentUserId
+    }
 
-    const yaraasxExists =
-        chats.value.some(
-            chat => chat.id === 2,
-        )
+    // Миграция старых сообщений: они были сохранены относительно Yaraasx.
+    const legacyMessages = messages.value[CONVERSATION_ID] ?? []
+    legacyMessages.forEach(message => {
+      if (message.senderId == null) {
+        message.senderId = message.sender === 'me' ? 'yaraasx' : 'oleg'
+      }
+    })
 
-    if (
-        !yaraasxExists
-    ) {
-      chats.value.push({
+    // Сохраняем единственный чат между двумя локальными аккаунтами.
+    chats.value = [
+      {
+        id: 1,
+        name: 'Oleg',
+        username: '@oleg',
+        avatar: 'O',
+        online: true,
+        lastMessage: messages.value[CONVERSATION_ID]?.at(-1)?.text || 'Начните переписку',
+        lastTime: messages.value[CONVERSATION_ID]?.at(-1)?.time || '',
+        unread: 0,
+      },
+      {
         id: 2,
         name: 'Yaraasx',
-        username:
-            '@yaraasx',
+        username: '@yaraasx',
         avatar: 'Y',
         online: true,
-        lastMessage:
-            'Это мои сообщения',
-        lastTime: '12:40',
+        lastMessage: messages.value[CONVERSATION_ID]?.at(-1)?.text || 'Начните переписку',
+        lastTime: messages.value[CONVERSATION_ID]?.at(-1)?.time || '',
         unread: 0,
-      })
-    }
+      },
+    ]
 
-    if (
-        !messages.value[2]
-    ) {
-      messages.value[2] = []
-    }
+    activeChatId.value = currentUserId.value === 'yaraasx' ? 1 : 2
   } catch (error) {
     console.error(
         'Ошибка загрузки данных:',
@@ -1027,40 +1072,24 @@ onUnmounted(() => {
 
       </div>
 
-      <!-- PROFILE -->
+      <!-- PROFILE / ACCOUNT SWITCHER -->
 
       <div class="profile">
 
         <button
             class="profile-main"
             type="button"
-            @click="
-            selectChat(2)
-          "
+            @click.stop="toggleAccountMenu"
         >
 
           <div class="profile-avatar">
-
-            Y
-
-            <span
-                class="
-                profile-online-dot
-              "
-            />
-
+            {{ currentUser.avatar }}
+            <span class="profile-online-dot" />
           </div>
 
           <div class="profile-info">
-
-            <strong>
-              Yaraasx
-            </strong>
-
-            <span>
-              online
-            </span>
-
+            <strong>{{ currentUser.name }}</strong>
+            <span>{{ currentUser.username }} · online</span>
           </div>
 
         </button>
@@ -1068,11 +1097,31 @@ onUnmounted(() => {
         <button
             class="profile-button"
             type="button"
-            title="Меню профиля"
-            @click.stop
+            title="Сменить аккаунт"
+            @click.stop="toggleAccountMenu"
         >
-          ⋮
+          ⇅
         </button>
+
+        <div v-if="accountMenuOpen" class="account-switcher">
+          <div class="account-switcher-title">Переключить аккаунт</div>
+
+          <button
+              v-for="user in accounts"
+              :key="user.id"
+              type="button"
+              class="account-option"
+              :class="{ active: user.id === currentUserId }"
+              @click.stop="switchAccount(user.id)"
+          >
+            <span class="account-option-avatar">{{ user.avatar }}</span>
+            <span class="account-option-info">
+              <strong>{{ user.name }}</strong>
+              <small>{{ user.username }}</small>
+            </span>
+            <span v-if="user.id === currentUserId" class="account-check">✓</span>
+          </button>
+        </div>
 
       </div>
 
@@ -1166,8 +1215,8 @@ onUnmounted(() => {
               class="message-row"
               :class="{
               mine:
-                message.sender ===
-                'me',
+                (message.senderId ?? (message.sender === 'me' ? 'yaraasx' : 'oleg')) ===
+                currentUserId,
             }"
           >
 
@@ -1218,8 +1267,8 @@ onUnmounted(() => {
 
                 <span
                     v-if="
-                    message.sender ===
-                    'me'
+                    (message.senderId ?? (message.sender === 'me' ? 'yaraasx' : 'oleg')) ===
+                    currentUserId
                   "
                     class="checks"
                 >
@@ -2588,6 +2637,27 @@ button {
   border-radius: 10px;
 }
 
+
+.account-switcher {
+  position: absolute;
+  bottom: 76px;
+  left: 12px;
+  right: 12px;
+  padding: 8px;
+  background: #20232a;
+  border: 1px solid #343840;
+  border-radius: 14px;
+  z-index: 20;
+  box-shadow: 0 12px 30px rgba(0,0,0,.28);
+}
+
+.profile { position: relative; }
+.account-switcher-title { padding: 8px 10px; color: #9da3b0; font-size: 12px; }
+.account-option { display:flex; align-items:center; gap:10px; width:100%; border:0; background:transparent; color:#fff; padding:10px; border-radius:9px; cursor:pointer; text-align:left; }
+.account-option:hover, .account-option.active { background:#343840; }
+.account-option-avatar { display:grid; place-items:center; width:30px; height:30px; border-radius:50%; background:#5865f2; font-weight:700; }
+.account-check { margin-left:auto; color:#7ee2a8; }
+
 /* =========================================================
    RESPONSIVE
 ========================================================= */
@@ -2654,4 +2724,3 @@ button {
   }
 }
 </style>
-```
