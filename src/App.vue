@@ -1,6 +1,4 @@
 <script setup lang="ts">
-import { open } from "@tauri-apps/plugin-dialog"
-
 import {
   computed,
   nextTick,
@@ -14,6 +12,13 @@ interface Message {
   text: string
   sender: 'me' | 'other'
   time: string
+
+  // Картинка сообщения
+  image?: string
+  imageName?: string
+
+  // Пользователь, которому принадлежит сообщение
+  userId?: number
 }
 
 interface Chat {
@@ -31,22 +36,67 @@ interface SelectedFile {
   name: string
   size: number
   type: string
+  dataUrl: string
 }
 
-
-interface SelectedFile {
+interface User {
+  id: number
   name: string
-  size: number
-  type: string
+  username: string
+  avatar: string
+  online: boolean
 }
 
 const search = ref('')
 const messageText = ref('')
 const activeChatId = ref(1)
 
+/*
+|--------------------------------------------------------------------------
+| ПОЛЬЗОВАТЕЛИ
+|--------------------------------------------------------------------------
+*/
+
+const users = ref<User[]>([
+  {
+    id: 1,
+    name: 'Yaraasx',
+    username: '@yaraasx',
+    avatar: 'Y',
+    online: true,
+  },
+  {
+    id: 2,
+    name: 'Yaraasx 2',
+    username: '@yaraasx2',
+    avatar: 'Y2',
+    online: true,
+  },
+])
+
+const activeUserId = ref(1)
+
+const userSwitcherOpen = ref(false)
+
+/*
+|--------------------------------------------------------------------------
+| EMOJI / FILE
+|--------------------------------------------------------------------------
+*/
+
 const emojiOpen = ref(false)
-const fileInput = ref<HTMLInputElement | null>(null)
-const selectedFile = ref<SelectedFile | null>(null)
+
+const fileInput =
+    ref<HTMLInputElement | null>(null)
+
+const selectedFile =
+    ref<SelectedFile | null>(null)
+
+/*
+|--------------------------------------------------------------------------
+| CHATS
+|--------------------------------------------------------------------------
+*/
 
 const chats = ref<Chat[]>([
   {
@@ -71,6 +121,17 @@ const chats = ref<Chat[]>([
   },
 ])
 
+/*
+|--------------------------------------------------------------------------
+| MESSAGES
+|--------------------------------------------------------------------------
+|
+| userId = 1 — сообщения первого пользователя.
+| Старые сообщения без userId автоматически считаются сообщениями
+| первого пользователя.
+|
+*/
+
 const messages = ref<Record<number, Message[]>>({
   1: [
     {
@@ -78,32 +139,38 @@ const messages = ref<Record<number, Message[]>>({
       text: 'Привет!',
       sender: 'other',
       time: '12:39',
+      userId: 1,
     },
     {
       id: 2,
       text: 'Привет! Как дела?',
       sender: 'me',
       time: '12:40',
+      userId: 1,
     },
     {
       id: 3,
       text: 'Отлично 😎 А у тебя?',
       sender: 'other',
       time: '12:41',
+      userId: 1,
     },
   ],
+
   2: [
     {
       id: 4,
       text: 'Привет, Kirill!',
       sender: 'me',
       time: 'Вчера',
+      userId: 1,
     },
     {
       id: 5,
       text: 'Привет! До встречи!',
       sender: 'other',
       time: 'Вчера',
+      userId: 1,
     },
   ],
 })
@@ -112,10 +179,6 @@ const messages = ref<Record<number, Message[]>>({
 |--------------------------------------------------------------------------
 | EMOJI
 |--------------------------------------------------------------------------
-|
-| Здесь большой список emoji.
-| При каждом запуске приложения мы случайно выбираем часть из него.
-|
 */
 
 const allEmojis = [
@@ -160,15 +223,64 @@ const visibleEmojis = ref<string[]>([])
 
 /*
 |--------------------------------------------------------------------------
-| Перемешивание emoji
+| ACTIVE USER
+|--------------------------------------------------------------------------
+*/
+
+const activeUser = computed(() => {
+  return (
+      users.value.find(
+          user =>
+              user.id === activeUserId.value,
+      ) ?? users.value[0]
+  )
+})
+
+/*
+|--------------------------------------------------------------------------
+| ПЕРЕКЛЮЧЕНИЕ ПОЛЬЗОВАТЕЛЯ
+|--------------------------------------------------------------------------
+*/
+
+function toggleUserSwitcher() {
+  userSwitcherOpen.value =
+      !userSwitcherOpen.value
+}
+
+function switchUser(userId: number) {
+  activeUserId.value = userId
+
+  userSwitcherOpen.value = false
+
+  messageText.value = ''
+
+  selectedFile.value = null
+
+  emojiOpen.value = false
+
+  if (fileInput.value) {
+    fileInput.value.value = ''
+  }
+}
+
+/*
+|--------------------------------------------------------------------------
+| ПЕРЕМЕШИВАНИЕ EMOJI
 |--------------------------------------------------------------------------
 */
 
 function shuffle<T>(array: T[]): T[] {
   const result = [...array]
 
-  for (let i = result.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1))
+  for (
+      let i = result.length - 1;
+      i > 0;
+      i--
+  ) {
+    const j =
+        Math.floor(
+            Math.random() * (i + 1),
+        )
 
     ;[result[i], result[j]] = [
       result[j],
@@ -180,7 +292,8 @@ function shuffle<T>(array: T[]): T[] {
 }
 
 function generateRandomEmojis() {
-  visibleEmojis.value = shuffle(allEmojis).slice(0, 42)
+  visibleEmojis.value =
+      shuffle(allEmojis).slice(0, 42)
 }
 
 /*
@@ -191,30 +304,42 @@ function generateRandomEmojis() {
 
 const activeChat = computed(() => {
   return chats.value.find(
-      chat => chat.id === activeChatId.value,
+      chat =>
+          chat.id === activeChatId.value,
   )
 })
 
 const activeMessages = computed(() => {
-  return messages.value[activeChatId.value] ?? []
+  const chatMessages =
+      messages.value[
+          activeChatId.value
+          ] ?? []
+
+  return chatMessages.filter(
+      message =>
+          (message.userId ?? 1) ===
+          activeUserId.value,
+  )
 })
 
 const filteredChats = computed(() => {
-  const value = search.value
-      .toLowerCase()
-      .trim()
+  const value =
+      search.value
+          .toLowerCase()
+          .trim()
 
   if (!value) {
     return chats.value
   }
 
-  return chats.value.filter(chat =>
-      chat.name
-          .toLowerCase()
-          .includes(value) ||
-      chat.username
-          .toLowerCase()
-          .includes(value),
+  return chats.value.filter(
+      chat =>
+          chat.name
+              .toLowerCase()
+              .includes(value) ||
+          chat.username
+              .toLowerCase()
+              .includes(value),
   )
 })
 
@@ -243,7 +368,8 @@ function selectChat(chatId: number) {
 */
 
 function toggleEmojiPicker() {
-  emojiOpen.value = !emojiOpen.value
+  emojiOpen.value =
+      !emojiOpen.value
 }
 
 function addEmoji(emoji: string) {
@@ -263,25 +389,18 @@ function addEmoji(emoji: string) {
 |--------------------------------------------------------------------------
 | FILE
 |--------------------------------------------------------------------------
+|
+| ВАЖНО:
+| Раньше здесь использовался Tauri open().
+| Он открывал окно выбора файла, но выбранный файл
+| не передавался в handleFileSelected().
+|
+| Теперь используем обычный hidden input.
+|
 */
 
-async function openFilePicker() {
-  const file = await open({
-    multiple: false,
-    filters: [
-      {
-        name: "Images",
-        extensions: [
-          "png",
-          "jpg",
-          "jpeg",
-          "webp",
-        ],
-      },
-    ],
-  })
-
-  console.log(file)
+function openFilePicker() {
+  fileInput.value?.click()
 }
 
 function handleFileSelected(
@@ -296,11 +415,26 @@ function handleFileSelected(
     return
   }
 
-  selectedFile.value = {
-    name: file.name,
-    size: file.size,
-    type: file.type,
+  if (!file.type.startsWith('image/')) {
+    input.value = ''
+
+    return
   }
+
+  const reader = new FileReader()
+
+  reader.onload = () => {
+    selectedFile.value = {
+      name: file.name,
+      size: file.size,
+      type: file.type,
+      dataUrl: String(
+          reader.result,
+      ),
+    }
+  }
+
+  reader.readAsDataURL(file)
 }
 
 function removeSelectedFile() {
@@ -319,7 +453,9 @@ function formatFileSize(
   }
 
   if (bytes < 1024 * 1024) {
-    return `${(bytes / 1024).toFixed(1)} КБ`
+    return `${(
+        bytes / 1024
+    ).toFixed(1)} КБ`
   }
 
   return `${(
@@ -336,31 +472,38 @@ function formatFileSize(
 */
 
 function sendMessage() {
-  const text = messageText.value.trim()
+  const text =
+      messageText.value.trim()
 
-  if (!text && !selectedFile.value) {
+  if (
+      !text &&
+      !selectedFile.value
+  ) {
     return
   }
 
-  if (!messages.value[activeChatId.value]) {
-    messages.value[activeChatId.value] = []
+  if (
+      !messages.value[
+          activeChatId.value
+          ]
+  ) {
+    messages.value[
+        activeChatId.value
+        ] = []
   }
 
-  let finalText = text
+  const file =
+      selectedFile.value
 
-  if (selectedFile.value) {
-    const fileText =
-        `📎 ${selectedFile.value.name}`
-
-    finalText = finalText
-        ? `${finalText}\n${fileText}`
-        : fileText
-  }
-
-  messages.value[activeChatId.value].push({
+  messages.value[
+      activeChatId.value
+      ].push({
     id: Date.now(),
-    text: finalText,
+
+    text,
+
     sender: 'me',
+
     time: new Date().toLocaleTimeString(
         [],
         {
@@ -368,17 +511,31 @@ function sendMessage() {
           minute: '2-digit',
         },
     ),
+
+    userId:
+    activeUserId.value,
+
+    image:
+    file?.dataUrl,
+
+    imageName:
+    file?.name,
   })
 
   const chat = chats.value.find(
-      item => item.id === activeChatId.value,
+      item =>
+          item.id ===
+          activeChatId.value,
   )
 
   if (chat) {
-    chat.lastMessage =
-        selectedFile.value
-            ? `📎 ${selectedFile.value.name}`
-            : text
+    if (file) {
+      chat.lastMessage = text
+          ? `🖼️ ${text}`
+          : `🖼️ ${file.name}`
+    } else {
+      chat.lastMessage = text
+    }
 
     chat.lastTime = 'Сейчас'
   }
@@ -389,6 +546,12 @@ function sendMessage() {
 
   emojiOpen.value = false
 }
+
+/*
+|--------------------------------------------------------------------------
+| ENTER
+|--------------------------------------------------------------------------
+*/
 
 function handleEnter(
     event: KeyboardEvent,
@@ -404,7 +567,7 @@ function handleEnter(
 
 /*
 |--------------------------------------------------------------------------
-| CLOSE EMOJI
+| OUTSIDE CLICK
 |--------------------------------------------------------------------------
 */
 
@@ -415,9 +578,19 @@ function handleOutsideClick(
       event.target as HTMLElement
 
   if (
-      !target.closest('.emoji-wrapper')
+      !target.closest(
+          '.emoji-wrapper',
+      )
   ) {
     emojiOpen.value = false
+  }
+
+  if (
+      !target.closest(
+          '.profile',
+      )
+  ) {
+    userSwitcherOpen.value = false
   }
 }
 
@@ -426,14 +599,18 @@ function handleEscape(
 ) {
   if (event.key === 'Escape') {
     emojiOpen.value = false
+
+    userSwitcherOpen.value = false
   }
 }
 
+/*
+|--------------------------------------------------------------------------
+| LIFECYCLE
+|--------------------------------------------------------------------------
+*/
+
 onMounted(() => {
-  /*
-   * При каждом запуске выбираем
-   * новый набор emoji.
-   */
   generateRandomEmojis()
 
   document.addEventListener(
@@ -460,13 +637,17 @@ onUnmounted(() => {
 })
 </script>
 
+```vue
 <template>
   <div class="app">
+
     <!-- =========================
          SIDEBAR
     ========================== -->
 
     <aside class="sidebar">
+
+      <!-- HEADER -->
       <div class="sidebar-header">
         <div class="brand">
           <div class="brand-logo">
@@ -484,8 +665,10 @@ onUnmounted(() => {
         </button>
       </div>
 
+      <!-- SEARCH -->
       <div class="search-container">
         <div class="search-box">
+
           <span class="search-icon">
             ⌕
           </span>
@@ -503,31 +686,41 @@ onUnmounted(() => {
           >
             ×
           </span>
+
         </div>
       </div>
 
+      <!-- CHAT LIST -->
       <div class="chat-list">
+
         <button
             v-for="chat in filteredChats"
             :key="chat.id"
             class="chat-item"
             :class="{
-            active:
-              chat.id === activeChatId,
-          }"
+              active:
+                chat.id === activeChatId,
+            }"
             @click="selectChat(chat.id)"
         >
+
+          <!-- AVATAR -->
           <div class="avatar">
+
             {{ chat.avatar }}
 
             <span
                 v-if="chat.online"
                 class="online-dot"
             />
+
           </div>
 
+          <!-- CHAT INFO -->
           <div class="chat-info">
+
             <div class="chat-top">
+
               <span class="chat-name">
                 {{ chat.name }}
               </span>
@@ -535,9 +728,11 @@ onUnmounted(() => {
               <span class="chat-time">
                 {{ chat.lastTime }}
               </span>
+
             </div>
 
             <div class="chat-bottom">
+
               <span class="last-message">
                 {{ chat.lastMessage }}
               </span>
@@ -548,54 +743,167 @@ onUnmounted(() => {
               >
                 {{ chat.unread }}
               </span>
+
             </div>
+
           </div>
+
         </button>
 
+        <!-- EMPTY SEARCH -->
         <div
             v-if="filteredChats.length === 0"
             class="empty-search"
         >
           Ничего не найдено
         </div>
+
       </div>
+
+
+      <!-- =========================
+           PROFILE / USER SWITCHER
+      ========================== -->
 
       <div class="profile">
-        <div class="profile-avatar">
-          Y
-        </div>
 
-        <div class="profile-info">
-          <strong>Yaraasx</strong>
+        <!-- CURRENT USER -->
+        <button
+            class="profile-main"
+            @click="toggleUserSwitcher"
+        >
 
-          <span>online</span>
-        </div>
+          <div class="profile-avatar">
+            {{ activeUser.avatar }}
+          </div>
 
-        <button class="profile-button">
+          <div class="profile-info">
+
+            <strong>
+              {{ activeUser.name }}
+            </strong>
+
+            <span>
+              {{
+                activeUser.online
+                    ? 'online'
+                    : 'offline'
+              }}
+            </span>
+
+          </div>
+
+        </button>
+
+
+        <!-- THREE DOTS -->
+        <button
+            class="profile-button"
+            title="Переключить пользователя"
+            @click="toggleUserSwitcher"
+        >
           ⋮
         </button>
+
+
+        <!-- USER SWITCHER -->
+        <div
+            v-if="userSwitcherOpen"
+            class="user-switcher"
+            @click.stop
+        >
+
+          <div class="user-switcher-title">
+            Переключить пользователя
+          </div>
+
+
+          <!-- USERS -->
+          <button
+              v-for="user in users"
+              :key="user.id"
+              class="user-switcher-item"
+              :class="{
+                active:
+                  user.id === activeUserId,
+              }"
+              @click="switchUser(user.id)"
+          >
+
+            <div class="user-switcher-avatar">
+              {{ user.avatar }}
+            </div>
+
+            <div class="user-switcher-info">
+
+              <strong>
+                {{ user.name }}
+              </strong>
+
+              <span>
+                {{ user.username }}
+              </span>
+
+            </div>
+
+            <span
+                v-if="
+                  user.id === activeUserId
+                "
+                class="user-check"
+            >
+              ✓
+            </span>
+
+          </button>
+
+
+          <!-- ADD USER -->
+          <button
+              class="add-user-button"
+              @click.stop
+          >
+            ＋ Добавить пользователя
+          </button>
+
+        </div>
+
       </div>
+
     </aside>
 
+
     <!-- =========================
-         CHAT
+         MAIN CHAT
     ========================== -->
 
     <main class="chat">
+
+      <!-- =========================
+           CHAT HEADER
+      ========================== -->
+
       <header
           v-if="activeChat"
           class="chat-header"
       >
+
+        <!-- AVATAR -->
         <div class="header-avatar">
+
           {{ activeChat.avatar }}
 
           <span
               v-if="activeChat.online"
               class="online-dot"
           />
+
         </div>
 
+
+        <!-- INFO -->
         <div class="header-info">
+
           <strong>
             {{ activeChat.name }}
           </strong>
@@ -607,9 +915,13 @@ onUnmounted(() => {
                   : 'был(а) недавно'
             }}
           </span>
+
         </div>
 
+
+        <!-- ACTIONS -->
         <div class="header-actions">
+
           <button
               class="header-button"
               title="Поиск"
@@ -623,76 +935,126 @@ onUnmounted(() => {
           >
             ⋮
           </button>
+
         </div>
+
       </header>
+
 
       <!-- =========================
            MESSAGES
       ========================== -->
 
       <section class="messages">
+
         <div class="messages-background" />
 
+
         <div class="message-container">
+
+          <!-- MESSAGE -->
           <div
               v-for="message in activeMessages"
               :key="message.id"
               class="message-row"
               :class="{
-              mine:
-                message.sender === 'me',
-            }"
+                mine:
+                  message.sender === 'me',
+              }"
           >
+
             <div class="message">
-              <div class="message-text">
+
+              <!-- IMAGE -->
+              <img
+                  v-if="message.image"
+                  class="message-image"
+                  :src="message.image"
+                  :alt="
+                    message.imageName ||
+                    'Изображение'
+                  "
+              />
+
+
+              <!-- TEXT -->
+              <div
+                  v-if="message.text"
+                  class="message-text"
+              >
                 {{ message.text }}
               </div>
 
+
+              <!-- META -->
               <div class="message-meta">
+
                 <span>
                   {{ message.time }}
                 </span>
 
                 <span
                     v-if="
-                    message.sender === 'me'
-                  "
+                      message.sender === 'me'
+                    "
                     class="checks"
                 >
                   ✓✓
                 </span>
+
               </div>
+
             </div>
+
           </div>
+
+
+          <!-- NO MESSAGES -->
+          <div
+              v-if="activeMessages.length === 0"
+              class="empty-messages"
+          >
+            Нет сообщений
+          </div>
+
         </div>
+
       </section>
+
 
       <!-- =========================
            COMPOSER
       ========================== -->
 
       <footer class="composer">
-        <!-- EMOJI -->
+
+
+        <!-- =====================
+             EMOJI
+        ====================== -->
 
         <div class="emoji-wrapper">
+
           <button
               class="composer-button"
               title="Emoji"
               @click.stop="
-              toggleEmojiPicker()
-            "
+                toggleEmojiPicker()
+              "
           >
             😊
           </button>
 
-          <!-- EMOJI PANEL -->
 
+          <!-- EMOJI PANEL -->
           <div
               v-if="emojiOpen"
               class="emoji-panel"
               @click.stop
           >
+
             <div class="emoji-header">
+
               <strong>
                 Emoji
               </strong>
@@ -700,52 +1062,93 @@ onUnmounted(() => {
               <span>
                 Популярные
               </span>
+
             </div>
 
+
             <div class="emoji-grid">
+
               <button
                   v-for="(
-                  emoji, index
-                ) in visibleEmojis"
-                  :key="`${emoji}-${index}`"
+                    emoji, index
+                  ) in visibleEmojis"
+                  :key="
+                    `${emoji}-${index}`
+                  "
                   class="emoji-item"
                   @click="
-                  addEmoji(emoji)
-                "
+                    addEmoji(emoji)
+                  "
               >
                 {{ emoji }}
               </button>
+
             </div>
+
 
             <div class="emoji-footer">
               При следующем запуске
               набор изменится
             </div>
+
           </div>
+
         </div>
 
-        <!-- FILE INPUT -->
+
+        <!-- =====================
+             FILE INPUT
+        ====================== -->
 
         <input
             ref="fileInput"
             class="hidden-file-input"
             type="file"
+            accept="
+              image/png,
+              image/jpeg,
+              image/webp
+            "
             @change="
-            handleFileSelected
-          "
+              handleFileSelected
+            "
         />
 
-        <!-- SELECTED FILE -->
+
+        <!-- =====================
+             SELECTED FILE
+        ====================== -->
 
         <div
             v-if="selectedFile"
             class="selected-file"
         >
-          <div class="selected-file-icon">
+
+          <!-- PREVIEW -->
+          <img
+              v-if="
+                selectedFile.dataUrl
+              "
+              class="selected-file-preview"
+              :src="
+                selectedFile.dataUrl
+              "
+              alt="Предпросмотр"
+          />
+
+
+          <!-- FILE ICON -->
+          <div
+              v-else
+              class="selected-file-icon"
+          >
             📎
           </div>
 
+
+          <!-- FILE INFO -->
           <div class="selected-file-info">
+
             <strong>
               {{ selectedFile.name }}
             </strong>
@@ -757,60 +1160,79 @@ onUnmounted(() => {
                 )
               }}
             </span>
+
           </div>
 
+
+          <!-- REMOVE -->
           <button
               class="remove-file"
               title="Удалить"
               @click="
-              removeSelectedFile()
-            "
+                removeSelectedFile()
+              "
           >
             ×
           </button>
+
         </div>
 
-        <!-- TEXT -->
+
+        <!-- =====================
+             TEXT INPUT
+        ====================== -->
 
         <textarea
             v-model="messageText"
             placeholder="Написать сообщение..."
             rows="1"
-            @keydown.enter="handleEnter"
+            @keydown.enter="
+              handleEnter
+            "
         />
 
-        <!-- ATTACHMENT -->
+
+        <!-- =====================
+             ATTACHMENT
+        ====================== -->
 
         <button
             class="composer-button"
-            title="Прикрепить файл"
+            title="Прикрепить изображение"
             @click="openFilePicker"
         >
           📎
         </button>
 
-        <!-- SEND -->
+
+        <!-- =====================
+             SEND
+        ====================== -->
 
         <button
             class="send-button"
             :class="{
-            ready:
-              messageText.trim() ||
-              selectedFile,
-          }"
+              ready:
+                messageText.trim() ||
+                selectedFile,
+            }"
             :disabled="
-            !messageText.trim() &&
-            !selectedFile
-          "
+              !messageText.trim() &&
+              !selectedFile
+            "
             @click="sendMessage"
         >
           ➤
         </button>
+
       </footer>
+
     </main>
+
   </div>
 </template>
 
+```css
 <style>
 * {
   box-sizing: border-box;
@@ -1182,11 +1604,11 @@ button {
   font-size: 14px;
 }
 
-/* =========================
-   PROFILE
-========================= */
+
 
 .profile {
+  position: relative;
+
   height: 72px;
 
   display: flex;
@@ -1197,6 +1619,30 @@ button {
   padding: 10px 14px;
 
   border-top: 1px solid #292c33;
+}
+
+.profile-main {
+  min-width: 0;
+
+  flex: 1;
+
+  display: flex;
+  align-items: center;
+
+  gap: 11px;
+
+  padding: 0;
+
+  background: transparent;
+  color: white;
+
+  text-align: left;
+
+  cursor: pointer;
+}
+
+.profile-main:hover {
+  opacity: 0.9;
 }
 
 .profile-avatar {
@@ -1211,6 +1657,8 @@ button {
 }
 
 .profile-info {
+  min-width: 0;
+
   flex: 1;
 
   display: flex;
@@ -1220,7 +1668,12 @@ button {
 }
 
 .profile-info strong {
+  overflow: hidden;
+
   font-size: 14px;
+
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .profile-info span {
@@ -1230,6 +1683,13 @@ button {
 }
 
 .profile-button {
+  width: 32px;
+  height: 36px;
+
+  flex-shrink: 0;
+
+  border-radius: 9px;
+
   background: transparent;
 
   color: #7e8591;
@@ -1237,6 +1697,189 @@ button {
   font-size: 21px;
 
   cursor: pointer;
+}
+
+.profile-button:hover {
+  background: #24272e;
+  color: white;
+}
+
+/* =========================
+   USER SWITCHER
+========================= */
+
+.user-switcher {
+  position: absolute;
+
+  left: 10px;
+  bottom: 68px;
+
+  width: 280px;
+
+  padding: 8px;
+
+  border: 1px solid #353942;
+
+  border-radius: 14px;
+
+  background: #1b1e24;
+
+  box-shadow:
+      0 15px 45px rgba(0, 0, 0, 0.55);
+
+  z-index: 200;
+
+  animation:
+      userSwitcherOpen
+      0.15s
+      ease-out;
+}
+
+.user-switcher-title {
+  padding: 8px 10px 10px;
+
+  color: #777e8a;
+
+  font-size: 11px;
+  font-weight: 600;
+
+  text-transform: uppercase;
+}
+
+.user-switcher-item {
+  width: 100%;
+
+  display: flex;
+  align-items: center;
+
+  gap: 10px;
+
+  padding: 9px;
+
+  border-radius: 10px;
+
+  background: transparent;
+  color: white;
+
+  text-align: left;
+
+  cursor: pointer;
+
+  transition: 0.15s;
+}
+
+.user-switcher-item:hover {
+  background: #25282e;
+}
+
+.user-switcher-item.active {
+  background: #2f6fe4;
+}
+
+.user-switcher-avatar {
+  width: 38px;
+  height: 38px;
+
+  flex-shrink: 0;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  border-radius: 50%;
+
+  background: linear-gradient(
+      135deg,
+      #3c82f6,
+      #7647ff
+  );
+
+  color: white;
+
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.user-switcher-info {
+  min-width: 0;
+
+  flex: 1;
+
+  display: flex;
+  flex-direction: column;
+
+  gap: 2px;
+}
+
+.user-switcher-info strong {
+  overflow: hidden;
+
+  font-size: 13px;
+
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.user-switcher-info span {
+  overflow: hidden;
+
+  color: #8d95a2;
+
+  font-size: 11px;
+
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.user-switcher-item.active
+.user-switcher-info span {
+  color: #dbe7ff;
+}
+
+.user-check {
+  flex-shrink: 0;
+
+  color: white;
+
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.add-user-button {
+  width: 100%;
+
+  margin-top: 5px;
+
+  padding: 10px;
+
+  border-top: 1px solid #30343c;
+  border-radius: 9px;
+
+  background: transparent;
+
+  color: #7eaaff;
+
+  text-align: left;
+
+  cursor: pointer;
+
+  transition: 0.15s;
+}
+
+.add-user-button:hover {
+  background: #25282e;
+}
+
+@keyframes userSwitcherOpen {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 /* =========================
@@ -1304,6 +1947,7 @@ button {
   margin-left: auto;
 
   display: flex;
+
   gap: 4px;
 }
 
@@ -1343,6 +1987,7 @@ button {
 
 .messages-background {
   position: absolute;
+
   inset: 0;
 
   opacity: 0.25;
@@ -1411,6 +2056,34 @@ button {
   overflow-wrap: anywhere;
 }
 
+/* =========================
+   MESSAGE IMAGE
+========================= */
+
+.message-image {
+  display: block;
+
+  width: 100%;
+  max-width: 420px;
+  max-height: 420px;
+
+  margin: 0 0 7px;
+
+  border-radius: 10px;
+
+  object-fit: cover;
+
+  background: #15171c;
+
+  cursor: pointer;
+
+  transition: opacity 0.15s;
+}
+
+.message-image:hover {
+  opacity: 0.95;
+}
+
 .message-meta {
   display: flex;
   align-items: center;
@@ -1431,6 +2104,18 @@ button {
 
 .checks {
   font-size: 11px;
+}
+
+.empty-messages {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  min-height: 200px;
+
+  color: #777e8a;
+
+  font-size: 14px;
 }
 
 /* =========================
@@ -1609,6 +2294,7 @@ button {
 
 .emoji-grid::-webkit-scrollbar-thumb {
   background: #3b3f48;
+
   border-radius: 10px;
 }
 
@@ -1687,6 +2373,8 @@ button {
   width: 35px;
   height: 35px;
 
+  flex-shrink: 0;
+
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1694,6 +2382,21 @@ button {
   border-radius: 9px;
 
   background: #2f6fe4;
+}
+
+.selected-file-preview {
+  width: 48px;
+  height: 48px;
+
+  flex-shrink: 0;
+
+  display: block;
+
+  border-radius: 8px;
+
+  object-fit: cover;
+
+  background: #15171c;
 }
 
 .selected-file-info {
@@ -1727,6 +2430,8 @@ button {
 .remove-file {
   width: 30px;
   height: 30px;
+
+  flex-shrink: 0;
 
   border-radius: 8px;
 
@@ -1776,6 +2481,10 @@ button {
   .emoji-panel {
     width: 300px;
   }
+
+  .user-switcher {
+    width: 270px;
+  }
 }
 
 @media (max-width: 600px) {
@@ -1798,6 +2507,7 @@ button {
 
   .chat-item {
     justify-content: center;
+
     padding: 10px 4px;
   }
 
@@ -1805,8 +2515,17 @@ button {
     justify-content: center;
   }
 
+  .profile-main {
+    justify-content: center;
+  }
+
   .message {
     max-width: 88%;
+  }
+
+  .message-image {
+    max-width: 100%;
+    max-height: 300px;
   }
 
   .emoji-panel {
@@ -1814,5 +2533,18 @@ button {
 
     width: 290px;
   }
+
+  .user-switcher {
+    left: 5px;
+    bottom: 65px;
+
+    width: 270px;
+  }
+
+  .selected-file-preview {
+    width: 42px;
+    height: 42px;
+  }
 }
 </style>
+
